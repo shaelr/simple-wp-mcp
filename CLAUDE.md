@@ -98,6 +98,12 @@ etc.) — never the REST API or HTTP calls back into the site itself.
   `get_media`, `delete_media` (always permanent — WordPress core only trashes
   attachments when `MEDIA_TRASH` is defined true, which most sites don't
   set).
+- **Plugins (list/activate/deactivate only — never install):**
+  `list_plugins`, `activate_plugin`, `deactivate_plugin`. All three require
+  the "act as" user to have the `activate_plugins` capability
+  (administrators only — editors will get a clear permission error).
+  `activate_plugin`/`deactivate_plugin` refuse to touch Simple WP MCP's own
+  plugin file to avoid an accidental self-lockout.
 
 Safety defaults worth knowing:
 - `create_post`/`create_page` default to `draft` unless `status` is
@@ -113,10 +119,13 @@ Safety defaults worth knowing:
 
 Deliberately excluded, even though the auth model would technically allow
 them — flag if you want these added:
-- **Plugin/theme installation or activation.** Installing a plugin from a
-  URL is effectively remote code execution on the server; too dangerous for
-  a bearer-token-only auth model with no expiry or audit trail beyond the
-  single "act as" user.
+- **Plugin/theme installation, and theme activation.** Installing a plugin
+  from a URL is effectively remote code execution on the server; too
+  dangerous for a bearer-token-only auth model with no expiry or audit trail
+  beyond the single "act as" user. Activating/deactivating an *already
+  installed* plugin is allowed (`list_plugins`/`activate_plugin`/
+  `deactivate_plugin`) since it only toggles code already vetted onto the
+  server by the site owner, gated behind the `activate_plugins` capability.
 - **User account management** (creating/deleting users, changing roles or
   passwords). Same trust-boundary concern — the secret already grants full
   content control via the "act as" user; account management is a separate,

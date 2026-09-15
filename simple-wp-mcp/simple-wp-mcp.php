@@ -3,7 +3,7 @@
  * Plugin Name: Simple WP MCP
  * Plugin URI: https://github.com/
  * Description: Minimal, self-hosted MCP (Model Context Protocol) server so Claude.ai's custom connector can manage this site's posts, pages, custom post types, taxonomies, menus, media, and site settings directly. Single long-lived secret in the URL — no OAuth, no expiring tokens, no IP pinning.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Requires at least: 5.6
  * Requires PHP: 7.4
  * Author: Simple WP MCP
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SIMPLE_WP_MCP_VERSION', '1.1.0' );
+define( 'SIMPLE_WP_MCP_VERSION', '1.2.0' );
 define( 'SIMPLE_WP_MCP_OPTION_TOKEN', 'simple_wp_mcp_token' );
 define( 'SIMPLE_WP_MCP_OPTION_USER', 'simple_wp_mcp_act_as_user' );
 define( 'SIMPLE_WP_MCP_NAMESPACE', 'simple-wp-mcp/v1' );
@@ -504,6 +504,42 @@ function simple_wp_mcp_get_tool_definitions() {
 			),
 		),
 		array(
+			'name'        => 'list_plugins',
+			'description' => 'List installed plugins with version and active/inactive status. Requires the "act as" user to be an administrator.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => new stdClass(),
+			),
+		),
+		array(
+			'name'        => 'activate_plugin',
+			'description' => 'Activate an already-installed plugin. Does not install new plugins. Requires the "act as" user to be an administrator.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'file' => array(
+						'type'        => 'string',
+						'description' => 'Plugin file path relative to the plugins directory, e.g. "akismet/akismet.php" — from list_plugins.',
+					),
+				),
+				'required'   => array( 'file' ),
+			),
+		),
+		array(
+			'name'        => 'deactivate_plugin',
+			'description' => 'Deactivate an installed plugin. Requires the "act as" user to be an administrator.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'file' => array(
+						'type'        => 'string',
+						'description' => 'Plugin file path relative to the plugins directory, e.g. "akismet/akismet.php" — from list_plugins.',
+					),
+				),
+				'required'   => array( 'file' ),
+			),
+		),
+		array(
 			'name'        => 'set_featured_image',
 			'description' => 'Set (or clear, with media_id 0) the featured image of a post or page.',
 			'inputSchema' => array(
@@ -823,6 +859,9 @@ function simple_wp_mcp_handle_tool_call( $id, $params ) {
 		'list_media'           => 'simple_wp_mcp_tool_list_media',
 		'get_media'            => 'simple_wp_mcp_tool_get_media',
 		'delete_media'         => 'simple_wp_mcp_tool_delete_media',
+		'list_plugins'         => 'simple_wp_mcp_tool_list_plugins',
+		'activate_plugin'      => 'simple_wp_mcp_tool_activate_plugin',
+		'deactivate_plugin'    => 'simple_wp_mcp_tool_deactivate_plugin',
 		'upload_media'         => 'simple_wp_mcp_tool_upload_media',
 	);
 
@@ -1713,4 +1752,90 @@ function simple_wp_mcp_tool_delete_media( $args ) {
 		'id'      => $id,
 		'deleted' => true,
 	);
+}
+
+/* -----------------------------------------------------------------------
+ * Plugin management (list / activate / deactivate only — never install)
+ * --------------------------------------------------------------------- */
+
+/**
+ * Deliberately no install/delete tools here: installing a plugin runs
+ * arbitrary, attacker-suppliable PHP on the server, which is a categorically
+ * different risk than toggling code that's already on disk. See CLAUDE.md.
+ */
+function simple_wp_mcp_require_plugin_capability() {
+	if ( ! current_user_can( 'activate_plugins' ) ) {
+		throw new Exception( 'The "act as" user (see Settings → Simple WP MCP) does not have permission to manage plugins — this requires an administrator.' );
+	}
+}
+
+function simple_wp_mcp_format_plugin( $plugin_file, $plugin_data ) {
+	return array(
+		'file'           => $plugin_file,
+		'name'           => $plugin_data['Name'],
+		'version'        => $plugin_data['Version'],
+		'description'    => wp_strip_all_tags( $plugin_data['Description'] ),
+		'author'         => wp_strip_all_tags( $plugin_data['Author'] ),
+		'active'         => is_plugin_active( $plugin_file ),
+		'network_active' => is_plugin_active_for_network( $plugin_file ),
+	);
+}
+
+function simple_wp_mcp_tool_list_plugins( $args ) {
+	simple_wp_mcp_require_plugin_capability();
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+	$result = array();
+	foreach ( get_plugins() as $file => $data ) {
+		$result[] = simple_wp_mcp_format_plugin( $file, $data );
+	}
+
+	return $result;
+}
+
+function simple_wp_mcp_tool_activate_plugin( $args ) {
+	simple_wp_mcp_require_plugin_capability();
+
+	if ( empty( $args['file'] ) ) {
+		throw new Exception( 'file is required, e.g. "akismet/akismet.php" — see list_plugins.' );
+	}
+
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+	$file      = $args['file'];
+	$installed = get_plugins();
+	if ( ! isset( $installed[ $file ] ) ) {
+		throw new Exception( 'Plugin not found: ' . $file . '. Use list_plugins to see installed plugins.' );
+	}
+
+	$result = activate_plugin( $file );
+	if ( is_wp_error( $result ) ) {
+		throw new Exception( $result->get_error_message() );
+	}
+
+	return simple_wp_mcp_format_plugin( $file, $installed[ $file ] );
+}
+
+function simple_wp_mcp_tool_deactivate_plugin( $args ) {
+	simple_wp_mcp_require_plugin_capability();
+
+	if ( empty( $args['file'] ) ) {
+		throw new Exception( 'file is required, e.g. "akismet/akismet.php" — see list_plugins.' );
+	}
+
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+	$file = $args['file'];
+	if ( plugin_basename( __FILE__ ) === $file ) {
+		throw new Exception( 'Refusing to deactivate Simple WP MCP itself — that would immediately disconnect this MCP session.' );
+	}
+
+	$installed = get_plugins();
+	if ( ! isset( $installed[ $file ] ) ) {
+		throw new Exception( 'Plugin not found: ' . $file . '. Use list_plugins to see installed plugins.' );
+	}
+
+	deactivate_plugins( $file );
+
+	return simple_wp_mcp_format_plugin( $file, $installed[ $file ] );
 }

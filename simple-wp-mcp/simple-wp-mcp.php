@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Simple WP MCP
  * Plugin URI: https://github.com/
- * Description: Minimal, self-hosted MCP (Model Context Protocol) server so Claude.ai's custom connector can manage this site's posts, pages, and media directly. Single long-lived secret in the URL — no OAuth, no expiring tokens, no IP pinning.
- * Version: 1.0.0
+ * Description: Minimal, self-hosted MCP (Model Context Protocol) server so Claude.ai's custom connector can manage this site's posts, pages, custom post types, taxonomies, menus, media, and site settings directly. Single long-lived secret in the URL — no OAuth, no expiring tokens, no IP pinning.
+ * Version: 1.1.0
  * Requires at least: 5.6
  * Requires PHP: 7.4
  * Author: Simple WP MCP
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SIMPLE_WP_MCP_VERSION', '1.0.0' );
+define( 'SIMPLE_WP_MCP_VERSION', '1.1.0' );
 define( 'SIMPLE_WP_MCP_OPTION_TOKEN', 'simple_wp_mcp_token' );
 define( 'SIMPLE_WP_MCP_OPTION_USER', 'simple_wp_mcp_act_as_user' );
 define( 'SIMPLE_WP_MCP_NAMESPACE', 'simple-wp-mcp/v1' );
@@ -305,23 +305,28 @@ function simple_wp_mcp_get_tool_definitions() {
 		'type'        => 'boolean',
 		'description' => 'If true, permanently delete instead of moving to trash. Defaults to false.',
 	);
+	$post_type_schema = array(
+		'type'        => 'string',
+		'description' => 'Post type slug (e.g. "product" for a WooCommerce product). Defaults to "post". Use list_post_types to see what\'s registered on this site. Cannot be "page" or "attachment" — use the dedicated page/media tools for those.',
+	);
 
 	return array(
 		array(
 			'name'        => 'list_posts',
-			'description' => 'List blog posts, optionally filtered by status or search term.',
+			'description' => 'List posts, optionally filtered by status, search term, or post_type (for custom post types).',
 			'inputSchema' => array(
 				'type'       => 'object',
 				'properties' => array(
-					'status'   => $status_filter,
-					'search'   => $search_schema,
-					'per_page' => $per_page_schema,
+					'status'    => $status_filter,
+					'search'    => $search_schema,
+					'per_page'  => $per_page_schema,
+					'post_type' => $post_type_schema,
 				),
 			),
 		),
 		array(
 			'name'        => 'get_post',
-			'description' => 'Get a single post by ID, including full content.',
+			'description' => 'Get a single post by ID, including full content. Works for any post type except page/attachment.',
 			'inputSchema' => array(
 				'type'       => 'object',
 				'properties' => array( 'id' => $id_schema ),
@@ -330,20 +335,21 @@ function simple_wp_mcp_get_tool_definitions() {
 		),
 		array(
 			'name'        => 'create_post',
-			'description' => 'Create a new blog post. Defaults to draft status unless status is explicitly set to "publish".',
+			'description' => 'Create a new post. Defaults to draft status unless status is explicitly set to "publish". Pass post_type to create a custom post type entry (e.g. a WooCommerce product) instead of a regular post.',
 			'inputSchema' => array(
 				'type'       => 'object',
 				'properties' => array(
-					'title'   => $title_schema,
-					'content' => $content_schema,
-					'status'  => $create_status_schema,
+					'title'     => $title_schema,
+					'content'   => $content_schema,
+					'status'    => $create_status_schema,
+					'post_type' => $post_type_schema,
 				),
 				'required'   => array( 'title' ),
 			),
 		),
 		array(
 			'name'        => 'update_post',
-			'description' => 'Update an existing post\'s title, content, and/or status.',
+			'description' => 'Update an existing post\'s title, content, and/or status. Works for any post type except page/attachment.',
 			'inputSchema' => array(
 				'type'       => 'object',
 				'properties' => array(
@@ -357,7 +363,7 @@ function simple_wp_mcp_get_tool_definitions() {
 		),
 		array(
 			'name'        => 'delete_post',
-			'description' => 'Delete a post. Moves to trash by default; pass force=true to permanently delete.',
+			'description' => 'Delete a post (any post type except page/attachment). Moves to trash by default; pass force=true to permanently delete.',
 			'inputSchema' => array(
 				'type'       => 'object',
 				'properties' => array(
@@ -464,6 +470,311 @@ function simple_wp_mcp_get_tool_definitions() {
 				),
 			),
 		),
+		array(
+			'name'        => 'list_media',
+			'description' => 'List media library items, optionally filtered by MIME type or search term.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'mime_type' => array(
+						'type'        => 'string',
+						'description' => 'Filter by MIME type or prefix, e.g. "image" or "image/jpeg".',
+					),
+					'search'    => $search_schema,
+					'per_page'  => $per_page_schema,
+				),
+			),
+		),
+		array(
+			'name'        => 'get_media',
+			'description' => 'Get a single media library item by ID.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array( 'id' => $id_schema ),
+				'required'   => array( 'id' ),
+			),
+		),
+		array(
+			'name'        => 'delete_media',
+			'description' => 'Permanently delete a media library item and its file.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array( 'id' => $id_schema ),
+				'required'   => array( 'id' ),
+			),
+		),
+		array(
+			'name'        => 'set_featured_image',
+			'description' => 'Set (or clear, with media_id 0) the featured image of a post or page.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'id'       => $id_schema,
+					'media_id' => array(
+						'type'        => 'integer',
+						'description' => 'Media attachment ID to use as the featured image. Pass 0 to remove the featured image.',
+					),
+				),
+				'required'   => array( 'id', 'media_id' ),
+			),
+		),
+		array(
+			'name'        => 'get_post_meta',
+			'description' => 'Get a post/page\'s custom fields (post meta). Omit key to get all non-internal meta, e.g. ACF field values.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'id'  => $id_schema,
+					'key' => array(
+						'type'        => 'string',
+						'description' => 'Specific meta key to fetch. Omit to fetch all custom fields.',
+					),
+				),
+				'required'   => array( 'id' ),
+			),
+		),
+		array(
+			'name'        => 'update_post_meta',
+			'description' => 'Set a custom field (post meta / ACF field) on a post or page.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'id'    => $id_schema,
+					'key'   => array(
+						'type'        => 'string',
+						'description' => 'Meta key.',
+					),
+					'value' => array(
+						'description' => 'Meta value. Any JSON type — strings, numbers, booleans, arrays, or objects.',
+					),
+				),
+				'required'   => array( 'id', 'key', 'value' ),
+			),
+		),
+		array(
+			'name'        => 'delete_post_meta',
+			'description' => 'Delete a custom field (post meta) from a post or page.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'id'  => $id_schema,
+					'key' => array(
+						'type'        => 'string',
+						'description' => 'Meta key to delete.',
+					),
+				),
+				'required'   => array( 'id', 'key' ),
+			),
+		),
+		array(
+			'name'        => 'list_post_types',
+			'description' => 'List public post types registered on this site (post, page, and any custom post types like WooCommerce products).',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => new stdClass(),
+			),
+		),
+		array(
+			'name'        => 'list_taxonomies',
+			'description' => 'List public taxonomies registered on this site (category, post_tag, and any custom taxonomies).',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => new stdClass(),
+			),
+		),
+		array(
+			'name'        => 'list_terms',
+			'description' => 'List all terms in an arbitrary taxonomy (use list_categories/list_tags for the common built-in ones).',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'taxonomy' => array(
+						'type'        => 'string',
+						'description' => 'Taxonomy slug, e.g. "product_cat". Use list_taxonomies to see available values.',
+					),
+				),
+				'required'   => array( 'taxonomy' ),
+			),
+		),
+		array(
+			'name'        => 'set_terms',
+			'description' => 'Assign categories, tags, or any other taxonomy\'s terms to a post. Terms not already existing (by name) are created. Replaces the post\'s current terms in that taxonomy.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'id'       => $id_schema,
+					'taxonomy' => array(
+						'type'        => 'string',
+						'description' => 'Taxonomy slug, e.g. "category", "post_tag", or "product_cat".',
+					),
+					'terms'    => array(
+						'type'        => 'array',
+						'items'       => array( 'type' => array( 'string', 'integer' ) ),
+						'description' => 'Term names or IDs to assign.',
+					),
+				),
+				'required'   => array( 'id', 'taxonomy', 'terms' ),
+			),
+		),
+		array(
+			'name'        => 'list_menus',
+			'description' => 'List navigation menus.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => new stdClass(),
+			),
+		),
+		array(
+			'name'        => 'get_menu',
+			'description' => 'Get a navigation menu\'s items.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array( 'id' => $id_schema ),
+				'required'   => array( 'id' ),
+			),
+		),
+		array(
+			'name'        => 'create_menu',
+			'description' => 'Create a new, empty navigation menu.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'name' => array(
+						'type'        => 'string',
+						'description' => 'Menu name.',
+					),
+				),
+				'required'   => array( 'name' ),
+			),
+		),
+		array(
+			'name'        => 'add_menu_item',
+			'description' => 'Add an item to a navigation menu, linking either to a post/page (post_id) or a custom URL (url + title).',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'menu_id'   => array(
+						'type'        => 'integer',
+						'description' => 'Menu ID from list_menus/create_menu.',
+					),
+					'post_id'   => array(
+						'type'        => 'integer',
+						'description' => 'ID of a post/page/CPT entry to link to. Provide this or url.',
+					),
+					'url'       => array(
+						'type'        => 'string',
+						'description' => 'Custom URL to link to (requires title). Provide this or post_id.',
+					),
+					'title'     => array(
+						'type'        => 'string',
+						'description' => 'Menu item label. Required for a custom URL; optional (defaults to the target\'s title) for post_id.',
+					),
+					'parent_id' => array(
+						'type'        => 'integer',
+						'description' => 'ID of another menu item to nest this one under, for a dropdown submenu.',
+					),
+					'position'  => array(
+						'type'        => 'integer',
+						'description' => 'Order position within the menu.',
+					),
+				),
+				'required'   => array( 'menu_id' ),
+			),
+		),
+		array(
+			'name'        => 'remove_menu_item',
+			'description' => 'Remove a single item from a navigation menu.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'item_id' => array(
+						'type'        => 'integer',
+						'description' => 'Menu item ID (from get_menu), not the menu ID.',
+					),
+				),
+				'required'   => array( 'item_id' ),
+			),
+		),
+		array(
+			'name'        => 'list_menu_locations',
+			'description' => 'List the navigation menu locations this theme supports (e.g. "primary", "footer") and which menu (if any) is assigned to each.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => new stdClass(),
+			),
+		),
+		array(
+			'name'        => 'assign_menu_location',
+			'description' => 'Assign a menu to a theme location so it actually appears on the site (e.g. in the header). Omit or pass menu_id 0 to unassign.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'location' => array(
+						'type'        => 'string',
+						'description' => 'Theme location slug from list_menu_locations.',
+					),
+					'menu_id'  => array(
+						'type'        => 'integer',
+						'description' => 'Menu ID to assign. Pass 0 to unassign the location.',
+					),
+				),
+				'required'   => array( 'location' ),
+			),
+		),
+		array(
+			'name'        => 'get_site_settings',
+			'description' => 'Get site-wide settings: title, tagline, homepage assignment, timezone, date/time formats, active theme, etc.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => new stdClass(),
+			),
+		),
+		array(
+			'name'        => 'update_site_settings',
+			'description' => 'Update site-wide settings. Only recognized fields are applied; unrecognized ones are ignored. Does not support changing the site URL, admin email, active theme, plugins, or permalink structure.',
+			'inputSchema' => array(
+				'type'       => 'object',
+				'properties' => array(
+					'title'           => array(
+						'type'        => 'string',
+						'description' => 'Site title.',
+					),
+					'tagline'         => array(
+						'type'        => 'string',
+						'description' => 'Site tagline.',
+					),
+					'timezone_string' => array(
+						'type'        => 'string',
+						'description' => 'IANA timezone, e.g. "America/New_York".',
+					),
+					'date_format'     => array(
+						'type'        => 'string',
+						'description' => 'PHP date() format string.',
+					),
+					'time_format'     => array(
+						'type'        => 'string',
+						'description' => 'PHP date() format string.',
+					),
+					'start_of_week'   => array(
+						'type'        => 'integer',
+						'description' => '0 (Sunday) through 6 (Saturday).',
+					),
+					'show_on_front'   => array(
+						'type'        => 'string',
+						'enum'        => array( 'posts', 'page' ),
+						'description' => 'Whether the homepage shows the latest posts or a static page.',
+					),
+					'page_on_front'   => array(
+						'type'        => 'integer',
+						'description' => 'Page ID to use as the static homepage (requires show_on_front="page").',
+					),
+					'page_for_posts'  => array(
+						'type'        => 'integer',
+						'description' => 'Page ID to use as the posts listing page (requires show_on_front="page").',
+					),
+				),
+			),
+		),
 	);
 }
 
@@ -480,19 +791,39 @@ function simple_wp_mcp_handle_tool_call( $id, $params ) {
 	}
 
 	$tools = array(
-		'list_posts'      => 'simple_wp_mcp_tool_list_posts',
-		'get_post'        => 'simple_wp_mcp_tool_get_post',
-		'create_post'     => 'simple_wp_mcp_tool_create_post',
-		'update_post'     => 'simple_wp_mcp_tool_update_post',
-		'delete_post'     => 'simple_wp_mcp_tool_delete_post',
-		'list_pages'      => 'simple_wp_mcp_tool_list_pages',
-		'get_page'        => 'simple_wp_mcp_tool_get_page',
-		'create_page'     => 'simple_wp_mcp_tool_create_page',
-		'update_page'     => 'simple_wp_mcp_tool_update_page',
-		'delete_page'     => 'simple_wp_mcp_tool_delete_page',
-		'list_categories' => 'simple_wp_mcp_tool_list_categories',
-		'list_tags'       => 'simple_wp_mcp_tool_list_tags',
-		'upload_media'    => 'simple_wp_mcp_tool_upload_media',
+		'list_posts'           => 'simple_wp_mcp_tool_list_posts',
+		'get_post'             => 'simple_wp_mcp_tool_get_post',
+		'create_post'          => 'simple_wp_mcp_tool_create_post',
+		'update_post'          => 'simple_wp_mcp_tool_update_post',
+		'delete_post'          => 'simple_wp_mcp_tool_delete_post',
+		'list_pages'           => 'simple_wp_mcp_tool_list_pages',
+		'get_page'             => 'simple_wp_mcp_tool_get_page',
+		'create_page'          => 'simple_wp_mcp_tool_create_page',
+		'update_page'          => 'simple_wp_mcp_tool_update_page',
+		'delete_page'          => 'simple_wp_mcp_tool_delete_page',
+		'set_featured_image'   => 'simple_wp_mcp_tool_set_featured_image',
+		'get_post_meta'        => 'simple_wp_mcp_tool_get_post_meta',
+		'update_post_meta'     => 'simple_wp_mcp_tool_update_post_meta',
+		'delete_post_meta'     => 'simple_wp_mcp_tool_delete_post_meta',
+		'list_post_types'      => 'simple_wp_mcp_tool_list_post_types',
+		'list_taxonomies'      => 'simple_wp_mcp_tool_list_taxonomies',
+		'list_categories'      => 'simple_wp_mcp_tool_list_categories',
+		'list_tags'            => 'simple_wp_mcp_tool_list_tags',
+		'list_terms'           => 'simple_wp_mcp_tool_list_terms',
+		'set_terms'            => 'simple_wp_mcp_tool_set_terms',
+		'list_menus'           => 'simple_wp_mcp_tool_list_menus',
+		'get_menu'             => 'simple_wp_mcp_tool_get_menu',
+		'create_menu'          => 'simple_wp_mcp_tool_create_menu',
+		'add_menu_item'        => 'simple_wp_mcp_tool_add_menu_item',
+		'remove_menu_item'     => 'simple_wp_mcp_tool_remove_menu_item',
+		'list_menu_locations'  => 'simple_wp_mcp_tool_list_menu_locations',
+		'assign_menu_location' => 'simple_wp_mcp_tool_assign_menu_location',
+		'get_site_settings'    => 'simple_wp_mcp_tool_get_site_settings',
+		'update_site_settings' => 'simple_wp_mcp_tool_update_site_settings',
+		'list_media'           => 'simple_wp_mcp_tool_list_media',
+		'get_media'            => 'simple_wp_mcp_tool_get_media',
+		'delete_media'         => 'simple_wp_mcp_tool_delete_media',
+		'upload_media'         => 'simple_wp_mcp_tool_upload_media',
 	);
 
 	if ( ! isset( $tools[ $name ] ) ) {
@@ -529,17 +860,64 @@ function simple_wp_mcp_handle_tool_call( $id, $params ) {
  * Tool implementations
  * --------------------------------------------------------------------- */
 
-function simple_wp_mcp_format_post( $post ) {
+/**
+ * Post types with dedicated tools (page) or that aren't real content
+ * (attachment, nav menu items, revisions, block-editor internals). The
+ * generic post_* tools refuse to touch these — use the matching dedicated
+ * tool instead.
+ */
+function simple_wp_mcp_reserved_post_types() {
 	return array(
-		'id'       => $post->ID,
-		'title'    => $post->post_title,
-		'status'   => $post->post_status,
-		'type'     => $post->post_type,
-		'link'     => get_permalink( $post ),
-		'date'     => $post->post_date,
-		'modified' => $post->post_modified,
-		'excerpt'  => wp_strip_all_tags( get_the_excerpt( $post ) ),
-		'author'   => (int) $post->post_author,
+		'page',
+		'attachment',
+		'nav_menu_item',
+		'revision',
+		'customize_changeset',
+		'custom_css',
+		'oembed_cache',
+		'user_request',
+		'wp_block',
+		'wp_template',
+		'wp_template_part',
+		'wp_global_styles',
+		'wp_navigation',
+	);
+}
+
+/**
+ * Validate a post_type argument for the generic post_* tools: must be a
+ * registered, public post type, and not one with its own dedicated tools.
+ */
+function simple_wp_mcp_validate_generic_post_type( $post_type ) {
+	$post_type = sanitize_key( $post_type );
+
+	if ( in_array( $post_type, simple_wp_mcp_reserved_post_types(), true ) ) {
+		throw new Exception( 'post_type "' . $post_type . '" has its own dedicated tools — use those instead.' );
+	}
+
+	$public_types = get_post_types( array( 'public' => true ), 'names' );
+	if ( ! in_array( $post_type, $public_types, true ) ) {
+		throw new Exception( 'Unknown or non-public post_type: ' . $post_type . '. Use list_post_types to see available types.' );
+	}
+
+	return $post_type;
+}
+
+function simple_wp_mcp_format_post( $post ) {
+	$thumbnail_id = get_post_thumbnail_id( $post );
+
+	return array(
+		'id'                 => $post->ID,
+		'title'              => $post->post_title,
+		'status'             => $post->post_status,
+		'type'               => $post->post_type,
+		'link'               => get_permalink( $post ),
+		'date'               => $post->post_date,
+		'modified'           => $post->post_modified,
+		'excerpt'            => wp_strip_all_tags( get_the_excerpt( $post ) ),
+		'author'             => (int) $post->post_author,
+		'featured_media'     => $thumbnail_id ? (int) $thumbnail_id : null,
+		'featured_media_url' => $thumbnail_id ? wp_get_attachment_url( $thumbnail_id ) : null,
 	);
 }
 
@@ -566,15 +944,36 @@ function simple_wp_mcp_list_content( $args, $post_type ) {
 	return array_map( 'simple_wp_mcp_format_post', get_posts( $query_args ) );
 }
 
+/**
+ * Fetch a single post. Pass a specific $post_type ('page') for the strict,
+ * dedicated tools, or null to accept any post type except the reserved
+ * ones (used by the generic post_* tools, which work across custom post
+ * types since an ID alone doesn't tell you the type in advance).
+ */
 function simple_wp_mcp_get_content( $args, $post_type ) {
 	$id   = isset( $args['id'] ) ? (int) $args['id'] : 0;
 	$post = $id ? get_post( $id ) : null;
 
-	if ( ! $post || $post->post_type !== $post_type ) {
-		throw new Exception( ucfirst( $post_type ) . ' not found: ' . $id );
+	if ( ! $post ) {
+		throw new Exception( 'Post not found: ' . $id );
 	}
 
+	simple_wp_mcp_check_content_type( $post, $post_type );
+
 	return simple_wp_mcp_format_post_full( $post );
+}
+
+function simple_wp_mcp_check_content_type( $post, $post_type ) {
+	if ( null !== $post_type ) {
+		if ( $post->post_type !== $post_type ) {
+			throw new Exception( ucfirst( $post_type ) . ' not found: ' . $post->ID );
+		}
+		return;
+	}
+
+	if ( in_array( $post->post_type, simple_wp_mcp_reserved_post_types(), true ) ) {
+		throw new Exception( 'ID ' . $post->ID . ' is a ' . $post->post_type . ', not a post — use the matching dedicated tool instead (get_page/update_page/delete_page for pages, the media tools for attachments).' );
+	}
 }
 
 function simple_wp_mcp_create_content( $args, $post_type ) {
@@ -605,9 +1004,11 @@ function simple_wp_mcp_update_content( $args, $post_type ) {
 	$id   = isset( $args['id'] ) ? (int) $args['id'] : 0;
 	$post = $id ? get_post( $id ) : null;
 
-	if ( ! $post || $post->post_type !== $post_type ) {
-		throw new Exception( ucfirst( $post_type ) . ' not found: ' . $id );
+	if ( ! $post ) {
+		throw new Exception( 'Post not found: ' . $id );
 	}
+
+	simple_wp_mcp_check_content_type( $post, $post_type );
 
 	$new_status = null;
 	if ( isset( $args['status'] ) ) {
@@ -653,15 +1054,17 @@ function simple_wp_mcp_delete_content( $args, $post_type ) {
 	$id   = isset( $args['id'] ) ? (int) $args['id'] : 0;
 	$post = $id ? get_post( $id ) : null;
 
-	if ( ! $post || $post->post_type !== $post_type ) {
-		throw new Exception( ucfirst( $post_type ) . ' not found: ' . $id );
+	if ( ! $post ) {
+		throw new Exception( 'Post not found: ' . $id );
 	}
+
+	simple_wp_mcp_check_content_type( $post, $post_type );
 
 	$force  = ! empty( $args['force'] );
 	$result = wp_delete_post( $id, $force );
 
 	if ( ! $result ) {
-		throw new Exception( 'Failed to delete ' . $post_type . ': ' . $id );
+		throw new Exception( 'Failed to delete ' . $post->post_type . ': ' . $id );
 	}
 
 	return array(
@@ -672,19 +1075,21 @@ function simple_wp_mcp_delete_content( $args, $post_type ) {
 }
 
 function simple_wp_mcp_tool_list_posts( $args ) {
-	return simple_wp_mcp_list_content( $args, 'post' );
+	$post_type = ! empty( $args['post_type'] ) ? simple_wp_mcp_validate_generic_post_type( $args['post_type'] ) : 'post';
+	return simple_wp_mcp_list_content( $args, $post_type );
 }
 function simple_wp_mcp_tool_get_post( $args ) {
-	return simple_wp_mcp_get_content( $args, 'post' );
+	return simple_wp_mcp_get_content( $args, null );
 }
 function simple_wp_mcp_tool_create_post( $args ) {
-	return simple_wp_mcp_create_content( $args, 'post' );
+	$post_type = ! empty( $args['post_type'] ) ? simple_wp_mcp_validate_generic_post_type( $args['post_type'] ) : 'post';
+	return simple_wp_mcp_create_content( $args, $post_type );
 }
 function simple_wp_mcp_tool_update_post( $args ) {
-	return simple_wp_mcp_update_content( $args, 'post' );
+	return simple_wp_mcp_update_content( $args, null );
 }
 function simple_wp_mcp_tool_delete_post( $args ) {
-	return simple_wp_mcp_delete_content( $args, 'post' );
+	return simple_wp_mcp_delete_content( $args, null );
 }
 
 function simple_wp_mcp_tool_list_pages( $args ) {
@@ -792,5 +1197,520 @@ function simple_wp_mcp_tool_upload_media( $args ) {
 	return array(
 		'id'  => $attachment_id,
 		'url' => wp_get_attachment_url( $attachment_id ),
+	);
+}
+
+/* -----------------------------------------------------------------------
+ * Featured images
+ * --------------------------------------------------------------------- */
+
+function simple_wp_mcp_tool_set_featured_image( $args ) {
+	$id   = isset( $args['id'] ) ? (int) $args['id'] : 0;
+	$post = $id ? get_post( $id ) : null;
+
+	if ( ! $post ) {
+		throw new Exception( 'Post not found: ' . $id );
+	}
+
+	$media_id = isset( $args['media_id'] ) ? (int) $args['media_id'] : 0;
+
+	if ( $media_id > 0 ) {
+		$attachment = get_post( $media_id );
+		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
+			throw new Exception( 'Media not found: ' . $media_id );
+		}
+		if ( ! set_post_thumbnail( $id, $media_id ) ) {
+			throw new Exception( 'Failed to set featured image' );
+		}
+	} else {
+		delete_post_thumbnail( $id );
+	}
+
+	return simple_wp_mcp_format_post_full( get_post( $id ) );
+}
+
+/* -----------------------------------------------------------------------
+ * Custom fields (post meta)
+ * --------------------------------------------------------------------- */
+
+function simple_wp_mcp_tool_get_post_meta( $args ) {
+	$id = isset( $args['id'] ) ? (int) $args['id'] : 0;
+	if ( ! $id || ! get_post( $id ) ) {
+		throw new Exception( 'Post not found: ' . $id );
+	}
+
+	$key = ! empty( $args['key'] ) ? sanitize_key( $args['key'] ) : '';
+
+	if ( '' !== $key ) {
+		return array(
+			'id'    => $id,
+			'key'   => $key,
+			'value' => get_post_meta( $id, $key, true ),
+		);
+	}
+
+	$meta   = get_post_meta( $id );
+	$result = array();
+	foreach ( $meta as $meta_key => $values ) {
+		if ( is_protected_meta( $meta_key, 'post' ) ) {
+			continue;
+		}
+		$result[ $meta_key ] = 1 === count( $values ) ? maybe_unserialize( $values[0] ) : array_map( 'maybe_unserialize', $values );
+	}
+
+	return array(
+		'id'   => $id,
+		'meta' => $result,
+	);
+}
+
+function simple_wp_mcp_tool_update_post_meta( $args ) {
+	$id = isset( $args['id'] ) ? (int) $args['id'] : 0;
+	if ( ! $id || ! get_post( $id ) ) {
+		throw new Exception( 'Post not found: ' . $id );
+	}
+	if ( empty( $args['key'] ) ) {
+		throw new Exception( 'key is required' );
+	}
+	if ( ! array_key_exists( 'value', $args ) ) {
+		throw new Exception( 'value is required' );
+	}
+
+	$key = sanitize_key( $args['key'] );
+	if ( is_protected_meta( $key, 'post' ) ) {
+		throw new Exception( 'Cannot modify protected meta key "' . $key . '" — use a dedicated tool instead (e.g. set_featured_image).' );
+	}
+
+	update_post_meta( $id, $key, $args['value'] );
+
+	return array(
+		'id'    => $id,
+		'key'   => $key,
+		'value' => get_post_meta( $id, $key, true ),
+	);
+}
+
+function simple_wp_mcp_tool_delete_post_meta( $args ) {
+	$id = isset( $args['id'] ) ? (int) $args['id'] : 0;
+	if ( ! $id || ! get_post( $id ) ) {
+		throw new Exception( 'Post not found: ' . $id );
+	}
+	if ( empty( $args['key'] ) ) {
+		throw new Exception( 'key is required' );
+	}
+
+	$key = sanitize_key( $args['key'] );
+	if ( is_protected_meta( $key, 'post' ) ) {
+		throw new Exception( 'Cannot modify protected meta key: ' . $key );
+	}
+
+	delete_post_meta( $id, $key );
+
+	return array(
+		'id'      => $id,
+		'key'     => $key,
+		'deleted' => true,
+	);
+}
+
+/* -----------------------------------------------------------------------
+ * Post types, taxonomies, and terms (categories, tags, and custom)
+ * --------------------------------------------------------------------- */
+
+function simple_wp_mcp_tool_list_post_types( $args ) {
+	$types  = get_post_types( array( 'public' => true ), 'objects' );
+	$result = array();
+
+	foreach ( $types as $type ) {
+		$result[] = array(
+			'name'         => $type->name,
+			'label'        => $type->label,
+			'hierarchical' => (bool) $type->hierarchical,
+		);
+	}
+
+	return $result;
+}
+
+function simple_wp_mcp_tool_list_taxonomies( $args ) {
+	$taxonomies = get_taxonomies( array( 'public' => true ), 'objects' );
+	$result     = array();
+
+	foreach ( $taxonomies as $tax ) {
+		$result[] = array(
+			'name'         => $tax->name,
+			'label'        => $tax->label,
+			'hierarchical' => (bool) $tax->hierarchical,
+			'object_types' => array_values( $tax->object_type ),
+		);
+	}
+
+	return $result;
+}
+
+function simple_wp_mcp_tool_list_terms( $args ) {
+	if ( empty( $args['taxonomy'] ) ) {
+		throw new Exception( 'taxonomy is required' );
+	}
+
+	$taxonomy = sanitize_key( $args['taxonomy'] );
+	if ( ! taxonomy_exists( $taxonomy ) ) {
+		throw new Exception( 'Unknown taxonomy: ' . $taxonomy . '. Use list_taxonomies to see available values.' );
+	}
+
+	$terms = get_terms(
+		array(
+			'taxonomy'   => $taxonomy,
+			'hide_empty' => false,
+		)
+	);
+	if ( is_wp_error( $terms ) ) {
+		throw new Exception( $terms->get_error_message() );
+	}
+
+	return array_map( 'simple_wp_mcp_format_term', $terms );
+}
+
+function simple_wp_mcp_tool_set_terms( $args ) {
+	$id   = isset( $args['id'] ) ? (int) $args['id'] : 0;
+	$post = $id ? get_post( $id ) : null;
+
+	if ( ! $post ) {
+		throw new Exception( 'Post not found: ' . $id );
+	}
+	if ( empty( $args['taxonomy'] ) ) {
+		throw new Exception( 'taxonomy is required' );
+	}
+
+	$taxonomy = sanitize_key( $args['taxonomy'] );
+	if ( ! taxonomy_exists( $taxonomy ) ) {
+		throw new Exception( 'Unknown taxonomy: ' . $taxonomy . '. Use list_taxonomies to see available values.' );
+	}
+	if ( ! is_object_in_taxonomy( $post->post_type, $taxonomy ) ) {
+		throw new Exception( 'Taxonomy "' . $taxonomy . '" is not registered for post type "' . $post->post_type . '"' );
+	}
+
+	$terms  = isset( $args['terms'] ) && is_array( $args['terms'] ) ? $args['terms'] : array();
+	$result = wp_set_post_terms( $id, $terms, $taxonomy, false );
+	if ( is_wp_error( $result ) ) {
+		throw new Exception( $result->get_error_message() );
+	}
+
+	$current = wp_get_post_terms( $id, $taxonomy );
+	if ( is_wp_error( $current ) ) {
+		throw new Exception( $current->get_error_message() );
+	}
+
+	return array(
+		'id'       => $id,
+		'taxonomy' => $taxonomy,
+		'terms'    => array_map( 'simple_wp_mcp_format_term', $current ),
+	);
+}
+
+/* -----------------------------------------------------------------------
+ * Navigation menus
+ * --------------------------------------------------------------------- */
+
+function simple_wp_mcp_format_menu( $menu ) {
+	return array(
+		'id'         => $menu->term_id,
+		'name'       => $menu->name,
+		'slug'       => $menu->slug,
+		'item_count' => (int) $menu->count,
+	);
+}
+
+function simple_wp_mcp_format_menu_item( $item ) {
+	return array(
+		'id'          => $item->ID,
+		'title'       => $item->title,
+		'url'         => $item->url,
+		'parent'      => (int) $item->menu_item_parent,
+		'position'    => (int) $item->menu_order,
+		'object_type' => $item->object,
+		'object_id'   => (int) $item->object_id,
+		'type'        => $item->type,
+	);
+}
+
+function simple_wp_mcp_tool_list_menus( $args ) {
+	return array_map( 'simple_wp_mcp_format_menu', wp_get_nav_menus() );
+}
+
+function simple_wp_mcp_tool_get_menu( $args ) {
+	$id = isset( $args['id'] ) ? (int) $args['id'] : 0;
+	if ( ! $id || ! wp_get_nav_menu_object( $id ) ) {
+		throw new Exception( 'Menu not found: ' . $id );
+	}
+
+	$items = wp_get_nav_menu_items( $id );
+	if ( false === $items ) {
+		$items = array();
+	}
+
+	return array(
+		'id'    => $id,
+		'items' => array_map( 'simple_wp_mcp_format_menu_item', $items ),
+	);
+}
+
+function simple_wp_mcp_tool_create_menu( $args ) {
+	if ( empty( $args['name'] ) ) {
+		throw new Exception( 'name is required' );
+	}
+
+	$id = wp_create_nav_menu( sanitize_text_field( $args['name'] ) );
+	if ( is_wp_error( $id ) ) {
+		throw new Exception( $id->get_error_message() );
+	}
+
+	return simple_wp_mcp_format_menu( wp_get_nav_menu_object( $id ) );
+}
+
+function simple_wp_mcp_tool_add_menu_item( $args ) {
+	$menu_id = isset( $args['menu_id'] ) ? (int) $args['menu_id'] : 0;
+	if ( ! $menu_id || ! wp_get_nav_menu_object( $menu_id ) ) {
+		throw new Exception( 'Menu not found: ' . $menu_id );
+	}
+
+	$item_args = array(
+		'menu-item-status'     => 'publish',
+		'menu-item-parent-id'  => isset( $args['parent_id'] ) ? (int) $args['parent_id'] : 0,
+	);
+
+	if ( ! empty( $args['position'] ) ) {
+		$item_args['menu-item-position'] = (int) $args['position'];
+	}
+
+	if ( ! empty( $args['post_id'] ) ) {
+		$target = get_post( (int) $args['post_id'] );
+		if ( ! $target ) {
+			throw new Exception( 'Post not found: ' . $args['post_id'] );
+		}
+		$item_args['menu-item-object-id'] = $target->ID;
+		$item_args['menu-item-object']    = $target->post_type;
+		$item_args['menu-item-type']      = 'post_type';
+		$item_args['menu-item-title']     = ! empty( $args['title'] ) ? sanitize_text_field( $args['title'] ) : '';
+	} elseif ( ! empty( $args['url'] ) ) {
+		if ( empty( $args['title'] ) ) {
+			throw new Exception( 'title is required for a custom URL menu item' );
+		}
+		$item_args['menu-item-type']  = 'custom';
+		$item_args['menu-item-title'] = sanitize_text_field( $args['title'] );
+		$item_args['menu-item-url']   = esc_url_raw( $args['url'] );
+	} else {
+		throw new Exception( 'Either post_id or url is required' );
+	}
+
+	$item_id = wp_update_nav_menu_item( $menu_id, 0, $item_args );
+	if ( is_wp_error( $item_id ) ) {
+		throw new Exception( $item_id->get_error_message() );
+	}
+
+	return simple_wp_mcp_format_menu_item( wp_setup_nav_menu_item( get_post( $item_id ) ) );
+}
+
+function simple_wp_mcp_tool_remove_menu_item( $args ) {
+	$item_id = isset( $args['item_id'] ) ? (int) $args['item_id'] : 0;
+	$item    = $item_id ? get_post( $item_id ) : null;
+
+	if ( ! $item || 'nav_menu_item' !== $item->post_type ) {
+		throw new Exception( 'Menu item not found: ' . $item_id );
+	}
+
+	if ( ! wp_delete_post( $item_id, true ) ) {
+		throw new Exception( 'Failed to remove menu item: ' . $item_id );
+	}
+
+	return array(
+		'id'      => $item_id,
+		'deleted' => true,
+	);
+}
+
+function simple_wp_mcp_tool_list_menu_locations( $args ) {
+	$registered = get_registered_nav_menus();
+	$assigned   = get_nav_menu_locations();
+	$result     = array();
+
+	foreach ( $registered as $location => $description ) {
+		$result[] = array(
+			'location'    => $location,
+			'description' => $description,
+			'menu_id'     => isset( $assigned[ $location ] ) ? (int) $assigned[ $location ] : null,
+		);
+	}
+
+	return $result;
+}
+
+function simple_wp_mcp_tool_assign_menu_location( $args ) {
+	if ( empty( $args['location'] ) ) {
+		throw new Exception( 'location is required' );
+	}
+
+	$location   = sanitize_key( $args['location'] );
+	$registered = get_registered_nav_menus();
+	if ( ! isset( $registered[ $location ] ) ) {
+		throw new Exception( 'Unknown menu location: ' . $location . '. Use list_menu_locations to see valid values for this theme.' );
+	}
+
+	$menu_id   = isset( $args['menu_id'] ) ? (int) $args['menu_id'] : 0;
+	$locations = get_theme_mod( 'nav_menu_locations', array() );
+
+	if ( $menu_id > 0 ) {
+		if ( ! wp_get_nav_menu_object( $menu_id ) ) {
+			throw new Exception( 'Menu not found: ' . $menu_id );
+		}
+		$locations[ $location ] = $menu_id;
+	} else {
+		unset( $locations[ $location ] );
+	}
+
+	set_theme_mod( 'nav_menu_locations', $locations );
+
+	return array(
+		'location' => $location,
+		'menu_id'  => $menu_id > 0 ? $menu_id : null,
+	);
+}
+
+/* -----------------------------------------------------------------------
+ * Site settings
+ * --------------------------------------------------------------------- */
+
+function simple_wp_mcp_tool_get_site_settings( $args ) {
+	$page_on_front  = (int) get_option( 'page_on_front' );
+	$page_for_posts = (int) get_option( 'page_for_posts' );
+
+	return array(
+		'title'               => get_bloginfo( 'name' ),
+		'tagline'             => get_bloginfo( 'description' ),
+		'url'                 => home_url(),
+		'admin_email'         => get_option( 'admin_email' ),
+		'timezone_string'     => get_option( 'timezone_string' ),
+		'date_format'         => get_option( 'date_format' ),
+		'time_format'         => get_option( 'time_format' ),
+		'start_of_week'       => (int) get_option( 'start_of_week' ),
+		'show_on_front'       => get_option( 'show_on_front' ),
+		'page_on_front'       => $page_on_front ? $page_on_front : null,
+		'page_for_posts'      => $page_for_posts ? $page_for_posts : null,
+		'permalink_structure' => get_option( 'permalink_structure' ),
+		'active_theme'        => get_option( 'stylesheet' ),
+	);
+}
+
+function simple_wp_mcp_tool_update_site_settings( $args ) {
+	$updated = array();
+
+	if ( isset( $args['title'] ) ) {
+		update_option( 'blogname', sanitize_text_field( $args['title'] ) );
+		$updated[] = 'title';
+	}
+	if ( isset( $args['tagline'] ) ) {
+		update_option( 'blogdescription', sanitize_text_field( $args['tagline'] ) );
+		$updated[] = 'tagline';
+	}
+	if ( isset( $args['timezone_string'] ) ) {
+		update_option( 'timezone_string', sanitize_text_field( $args['timezone_string'] ) );
+		$updated[] = 'timezone_string';
+	}
+	if ( isset( $args['date_format'] ) ) {
+		update_option( 'date_format', sanitize_text_field( $args['date_format'] ) );
+		$updated[] = 'date_format';
+	}
+	if ( isset( $args['time_format'] ) ) {
+		update_option( 'time_format', sanitize_text_field( $args['time_format'] ) );
+		$updated[] = 'time_format';
+	}
+	if ( isset( $args['start_of_week'] ) ) {
+		update_option( 'start_of_week', (int) $args['start_of_week'] );
+		$updated[] = 'start_of_week';
+	}
+	if ( isset( $args['show_on_front'] ) && in_array( $args['show_on_front'], array( 'posts', 'page' ), true ) ) {
+		update_option( 'show_on_front', $args['show_on_front'] );
+		$updated[] = 'show_on_front';
+	}
+	if ( isset( $args['page_on_front'] ) ) {
+		$page = get_post( (int) $args['page_on_front'] );
+		if ( ! $page || 'page' !== $page->post_type ) {
+			throw new Exception( 'page_on_front must be the ID of an existing page' );
+		}
+		update_option( 'page_on_front', $page->ID );
+		$updated[] = 'page_on_front';
+	}
+	if ( isset( $args['page_for_posts'] ) ) {
+		$page = get_post( (int) $args['page_for_posts'] );
+		if ( ! $page || 'page' !== $page->post_type ) {
+			throw new Exception( 'page_for_posts must be the ID of an existing page' );
+		}
+		update_option( 'page_for_posts', $page->ID );
+		$updated[] = 'page_for_posts';
+	}
+
+	return array_merge( array( 'updated' => $updated ), simple_wp_mcp_tool_get_site_settings( array() ) );
+}
+
+/* -----------------------------------------------------------------------
+ * Media library (list / get / delete — upload_media handles creation)
+ * --------------------------------------------------------------------- */
+
+function simple_wp_mcp_format_media( $post ) {
+	return array(
+		'id'        => $post->ID,
+		'title'     => $post->post_title,
+		'url'       => wp_get_attachment_url( $post->ID ),
+		'mime_type' => $post->post_mime_type,
+		'date'      => $post->post_date,
+		'alt'       => get_post_meta( $post->ID, '_wp_attachment_image_alt', true ),
+	);
+}
+
+function simple_wp_mcp_tool_list_media( $args ) {
+	$per_page = isset( $args['per_page'] ) ? max( 1, min( 100, (int) $args['per_page'] ) ) : 20;
+
+	$query_args = array(
+		'post_type'      => 'attachment',
+		'post_status'    => 'inherit',
+		'posts_per_page' => $per_page,
+	);
+
+	if ( ! empty( $args['mime_type'] ) ) {
+		$query_args['post_mime_type'] = sanitize_text_field( $args['mime_type'] );
+	}
+	if ( ! empty( $args['search'] ) ) {
+		$query_args['s'] = sanitize_text_field( $args['search'] );
+	}
+
+	return array_map( 'simple_wp_mcp_format_media', get_posts( $query_args ) );
+}
+
+function simple_wp_mcp_tool_get_media( $args ) {
+	$id   = isset( $args['id'] ) ? (int) $args['id'] : 0;
+	$post = $id ? get_post( $id ) : null;
+
+	if ( ! $post || 'attachment' !== $post->post_type ) {
+		throw new Exception( 'Media not found: ' . $id );
+	}
+
+	return simple_wp_mcp_format_media( $post );
+}
+
+function simple_wp_mcp_tool_delete_media( $args ) {
+	$id   = isset( $args['id'] ) ? (int) $args['id'] : 0;
+	$post = $id ? get_post( $id ) : null;
+
+	if ( ! $post || 'attachment' !== $post->post_type ) {
+		throw new Exception( 'Media not found: ' . $id );
+	}
+
+	if ( ! wp_delete_attachment( $id, true ) ) {
+		throw new Exception( 'Failed to delete media: ' . $id );
+	}
+
+	return array(
+		'id'      => $id,
+		'deleted' => true,
 	);
 }
